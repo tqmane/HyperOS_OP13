@@ -1,23 +1,28 @@
-name: Build HyperOS for OnePlus 13
+name: Build HyperOS for OnePlus 9 Pro
 
 on:
   workflow_dispatch:
     inputs:
       stock_url:
-        description: "OnePlus 13 stock ROM link (full OTA/fastboot zip or payload.bin) — source of vendor + odm"
+        description: "OnePlus 9 Pro stock ROM link (full OTA/fastboot zip or payload.bin) — source of vendor + odm"
         required: true
         type: string
       hyperos_url:
-        description: "HyperOS ROM link (HyperOS 2 to 4, full recovery/OTA zip or payload.bin) — source of system + system_ext + product"
+        description: "HyperOS donor ROM link (full recovery/OTA zip or payload.bin) — source of system + system_ext + product"
         required: true
         type: string
       name:
-        description: "Output name for the flashable zip"
+        description: "Output name for the port zip"
         required: false
-        default: "HyperOS-OnePlus13-port"
+        default: "HyperOS-OnePlus9Pro-port"
+        type: string
+      density:
+        description: "Optional logical LCD density override; leave empty for auto-detect/preserve donor"
+        required: false
+        default: ""
         type: string
       upload_pixeldrain:
-        description: "Upload the finished zip to pixeldrain (needs the PIXELDRAIN_API_KEY secret)"
+        description: "Upload the finished zip to pixeldrain (needs PIXELDRAIN_API_KEY)"
         required: false
         default: true
         type: boolean
@@ -31,7 +36,7 @@ jobs:
 
       - name: Install requirements
         run: |
-          chmod +x requirements.sh port.sh
+          chmod +x requirements.sh port.sh port.py
           ./requirements.sh
 
       - name: Free up disk space
@@ -39,9 +44,18 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
           df -h
 
-      - name: Build port
+      - name: Build OnePlus 9 Pro port
+        env:
+          STOCK_URL: ${{ inputs.stock_url }}
+          HYPEROS_URL: ${{ inputs.hyperos_url }}
+          OUTPUT_NAME: ${{ inputs.name }}
+          DENSITY: ${{ inputs.density }}
         run: |
-          ./port.sh --stock "${{ inputs.stock_url }}" --hyperos "${{ inputs.hyperos_url }}" --name "${{ inputs.name }}"
+          args=(--stock "$STOCK_URL" --hyperos "$HYPEROS_URL" --name "$OUTPUT_NAME")
+          if [ -n "$DENSITY" ]; then
+            args+=(--density "$DENSITY")
+          fi
+          ./port.sh "${args[@]}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -57,34 +71,18 @@ jobs:
           PIXELDRAIN_API_KEY: ${{ secrets.PIXELDRAIN_API_KEY }}
         run: |
           if [ -z "$PIXELDRAIN_API_KEY" ]; then
-            echo "::warning::Upload to pixeldrain is on but the PIXELDRAIN_API_KEY secret is not set. Add it under Settings > Secrets and variables > Actions. The build zip is still available as a workflow artifact above."
+            echo "::warning::PIXELDRAIN_API_KEY is not set; keeping the GitHub Actions artifact only."
             exit 0
           fi
           ZIP="$(ls out/*.zip | head -n1)"
           BASENAME="$(basename "$ZIP")"
-          echo "uploading $BASENAME ($(du -h "$ZIP" | cut -f1)) to pixeldrain"
-
-          # The simple PUT /api/file endpoint caps file size by plan and rejects
-          # a full ROM zip with file_too_large. rclone's pixeldrain backend uses
-          # pixeldrain's filesystem (Pro / Prepaid), which chunk-uploads large
-          # files. Ubuntu's apt rclone predates that backend, so install latest.
-          if ! rclone version 2>/dev/null | grep -q pixeldrain 2>/dev/null; then
-            curl -fsSL https://rclone.org/install.sh | sudo bash || sudo apt-get install -y rclone
-          fi
+          curl -fsSL https://rclone.org/install.sh | sudo bash || sudo apt-get install -y rclone
           export RCLONE_CONFIG_PD_TYPE=pixeldrain
           export RCLONE_CONFIG_PD_API_KEY="$PIXELDRAIN_API_KEY"
           export RCLONE_CONFIG_PD_ROOT_FOLDER_ID=me
-
           if rclone copy --stats-one-line --stats 30s "$ZIP" pd:/ ; then
             LINK="$(rclone link "pd:/$BASENAME" 2>/dev/null || true)"
-            if [ -n "$LINK" ]; then
-              echo "pixeldrain: $LINK"
-              echo "### Pixeldrain: [$BASENAME]($LINK)" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "uploaded to your pixeldrain filesystem as $BASENAME (share it from https://pixeldrain.com/filesystem)"
-              echo "### Uploaded to your pixeldrain filesystem: \`$BASENAME\`" >> "$GITHUB_STEP_SUMMARY"
-            fi
+            [ -z "$LINK" ] || echo "### Pixeldrain: [$BASENAME]($LINK)" >> "$GITHUB_STEP_SUMMARY"
           else
-            # never fail the build over the upload: the zip is already an artifact
-            echo "::warning::rclone pixeldrain upload failed. The zip is still available as a workflow artifact above. (The pixeldrain filesystem needs a Pro or Prepaid plan.)"
+            echo "::warning::Pixeldrain upload failed; the Actions artifact is still available."
           fi

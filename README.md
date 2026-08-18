@@ -1,168 +1,111 @@
-# HyperOS port for the OnePlus 13
+# HyperOS port for the OnePlus 9 Pro
 
-An auto-porter that builds a HyperOS ROM for the **OnePlus 13** (`dodge` /
-PJZ110). It supports HyperOS **2, 3 and 4** as the donor. You give it two ROMs —
-a OnePlus 13 stock package and a HyperOS package from a Xiaomi phone — and it
-spits out a flashable, uncompressed zip with `system`, `system_ext`, `product`,
-`vendor` and `odm` images.
+An experimental auto-porter for the **OnePlus 9 Pro** (`lemonadep`, OnePlus9Pro / LE212x family).
+It combines a genuine OnePlus 9 Pro stock ROM with a HyperOS donor ROM:
 
-It runs the same way locally or from GitHub Actions. There is no GUI and nothing
-to click through; it downloads (or takes local files), unpacks the payloads,
-does the porting steps, applies the fixes, repacks the erofs images and zips
-them.
+- `vendor` and `odm` come from the **OnePlus 9 Pro stock ROM** so the target hardware stack stays OnePlus/OPlus.
+- `system`, `system_ext` and `product` come from the **HyperOS donor**.
+- `mi_ext` is merged when the donor contains it; donors without `mi_ext` are also accepted.
 
-This porter targets the OnePlus 13 and nothing else. The geometry, panel values
-and SELinux labels are specific to this phone. Do not point it at another device
-and expect a boot.
+The output is an uncompressed zip containing `system.img`, `system_ext.img`, `product.img`, `vendor.img` and `odm.img`.
 
-## What comes from where
+> This is a first-stage OnePlus 9 Pro porting base, not a claim that every HyperOS donor will boot unchanged. Android/vendor compatibility still matters. Keep a known-good recovery/fastboot path before flashing.
 
-- **vendor** and **odm** are taken from the **OnePlus 13 stock ROM**. They stay
-  OnePlus. HyperOS runs on top of the OnePlus vendor blobs, not Xiaomi's.
-- **system**, **system_ext** and **product** come from the **HyperOS ROM**,
-  with `mi_ext` folded into `system` and `product`.
+## Why this fork is different from the original OP13 porter
+
+The original project contained OnePlus 13-specific values: ultrasonic-FOD coordinates, OP13 display geometry/configuration, a 600-dpi override, OnePlus 13 vendor display props and an ODM attestation block containing the OnePlus 13 market name. Those values are deliberately **not** reused on the OnePlus 9 Pro.
+
+This branch instead keeps OnePlus 9 Pro stock `vendor`/`odm` as close to stock as possible and only applies generic HyperOS-side assembly changes. Hardware fixes can then be added under `RES/` after they are verified on the actual device.
+
+The reference `coloros_port` project identifies the OnePlus 9 Pro as `OnePlus9Pro` and uses a super size of `11190403072` bytes for OnePlus 9 / 9 Pro. That value is documented in `devices/OnePlus9Pro/device.conf` for future super-image/flash-package work; the current porter still outputs individual dynamic-partition images.
 
 ## Requirements
 
-Linux (x86_64). The `requirements.sh` script installs what you need on Arch,
-Debian, Ubuntu and Fedora, and grabs `payload-dumper-go`:
+Linux x86_64 is recommended.
 
-```
+```bash
 ./requirements.sh
 ```
 
-If `payload-dumper-go` can't be fetched, the porter falls back to a small
-built-in Python payload extractor, so it still works offline.
+## Local build
 
-## Running it locally
-
-```
-./requirements.sh
-./port.sh --stock <oneplus13-stock> --hyperos <hyperos-rom>
+```bash
+./port.sh \
+  --stock /path/to/OnePlus9Pro-stock.zip \
+  --hyperos /path/to/HyperOS-donor.zip
 ```
 
-`--stock` and `--hyperos` each accept:
+Both inputs may be a URL, OTA/fastboot zip, `payload.bin`, or a directory containing raw partition images.
 
-- a direct download link,
-- a local `.zip` (full OTA / fastboot / recovery package),
-- a local `payload.bin`, or
-- a directory that already holds the raw `.img` files.
+Useful options:
 
-The finished zip lands in `out/`. Useful flags:
-
-```
---name <basename>     name for the output zip
---out <dir>           output directory (default: out)
---work <dir>          working directory (default: work)
---keep-work           keep the working tree instead of cleaning it up
+```text
+--name <basename>         output zip basename
+--out <dir>               output directory (default: out)
+--work <dir>              working directory (default: work)
+--res <dir>               overlay directory (default: RES)
+--density <dpi>           explicitly override HyperOS logical density
+--skip-target-check       bypass OnePlus 9 Pro stock marker validation
+--keep-work               keep the working tree between runs
 ```
 
-There are two interchangeable front-ends:
+`port.sh` is a thin wrapper around `port.py`, so both entry points use exactly the same implementation.
 
-- `port.sh` — the Bash pipeline (does the downloading, unpacking, prop edits,
-  packing and zipping in shell).
-- `port.py` — the same pipeline in Python.
+## Target validation
 
-Both share the SELinux config generator (`lib/erofs_config.py`) and the payload
-fallback (`lib/payload_extractor.py`). Use whichever you prefer.
+After unpacking the stock `vendor` and `odm`, the porter looks for known OnePlus 9 Pro identifiers (`OnePlus9Pro`, `lemonadep`, or LE212x model markers). If none are present, the build stops rather than silently producing an image for the wrong device.
 
-## Running it from GitHub Actions
+Use `--skip-target-check` only when you have independently verified that the supplied stock package is for the OnePlus 9 Pro but its build props do not expose one of those identifiers.
 
-1. Fork this repo.
-2. If you want the automatic pixeldrain upload, add your key under
-   **Settings → Secrets and variables → Actions** as `PIXELDRAIN_API_KEY`.
-3. Go to the **Actions** tab, pick **Build HyperOS for OnePlus 13**, and hit
-   **Run workflow**.
-4. Paste the OnePlus 13 stock ROM link and the HyperOS link.
+## Porting flow
 
-The **Upload to pixeldrain** toggle is on by default. The upload goes through
-rclone's pixeldrain backend (the full ROM zip is too big for the plain upload
-API), so it needs a pixeldrain **Pro or Prepaid** plan; on success the run
-prints a share link. Either way the zip is always attached as a normal workflow
-artifact, and if the secret is missing or the upload fails the build still
-finishes — it just skips the upload.
+1. Extract OnePlus 9 Pro `vendor` and `odm` from the stock ROM.
+2. Validate the target stock package.
+3. Extract HyperOS `system`, `system_ext` and `product`; extract `mi_ext` when present.
+4. Fold `mi_ext/product` into `product` and `mi_ext/system` into `system/system`.
+5. Merge `mi_ext/etc/build.prop` while excluding `ro.vendor.build.ab_ota_partitions`.
+6. Add the generic MIUI home/dexopt compatibility props.
+7. Move `product/pangu/system` into `system/system` when present.
+8. Remove `system_ext/priv-app/qcrilmsgtunnel` to avoid carrying the donor Qualcomm RIL tunnel into the OPlus hardware stack.
+9. Preserve target `vendor`/`odm` instead of injecting OP13 display/FOD/attestation values.
+10. Auto-detect `ro.sf.lcd_density` from the target stock vendor/odm when available; otherwise keep the donor density unless `--density` is supplied.
+11. Apply optional files from `RES/<partition>/...`.
+12. Regenerate EROFS `fs_config` / `file_contexts`, repack, and create the output zip.
 
-## What it fixes
+## RES overlays
 
-A straight port of HyperOS onto the OnePlus 13 boots with several things
-broken. This porter bakes in the fixes for them:
+`RES/` is intentionally empty of OP13 hardware overrides. To test a verified OnePlus 9 Pro fix, mirror the partition path under `RES`, for example:
 
-- **Under-display fingerprint (FOD).** Out of the box there is no way to enrol a
-  fingerprint (no FOD icon, no "add fingerprint"), and even once it shows,
-  enrolment dies with `invalid cali data`. Fixed with the FOD geometry props,
-  the enrolment gate (`vendor.fingerprint.cali=1`), the fingerprint permission
-  xml labelled `vendor_configs_file`, and the SELinux property contexts that let
-  system_server read the props and let the fingerprint HAL set its own.
-- **120 Hz.** The display runs at 60 Hz until the refresh-rate block and the
-  device-features flags are corrected.
-- **Brightness curve and boot hang.** The Xiaomi brightness map starts above the
-  OnePlus panel's minimum brightness, which makes the brightness spline blow up
-  and the phone hangs on the boot animation. The bundled display config starts
-  the map at the real panel minimum and uses the OnePlus 13's own calibration.
-- **Status bar icon tint.** Status-bar icons get stuck at the wrong intensity
-  without `debug.layered.strategy.phone=99`.
-- **Camera.** The ported MiuiCamera is removed and replaced with a working
-  build. That apk is too big for git, so the porter downloads it into `RES/`
-  automatically (locally and on Actions) unless you already put it there.
+```text
+RES/vendor/etc/...
+RES/product/etc/...
+RES/system_ext/...
+```
 
-### Known issues that are NOT fixed here
+The files are copied over the assembled tree before SELinux metadata is regenerated.
 
-- **Face unlock enrolment freezes.** Fixing it needs edits to `Settings.apk`,
-  which this porter does not do.
-- **Always-on display (AOD).** Not addressed.
+## What still needs real-device validation
 
-## The RES folder
+The first boot should be used to collect evidence before adding hardware-specific patches. In particular, verify:
 
-`RES/` holds files that get copied over the assembled ROM at the end, replacing
-whatever was there. The layout mirrors the partitions: `RES/product/...` copies
-into `product`, `RES/vendor/...` copies into `vendor`, and so on — everything
-inside a partition folder in `RES` is copied to that partition. After the copy,
-the porter regenerates the SELinux `fs_config` and `file_contexts` entries for
-the new files, inheriting each label from the nearest parent directory (which is
-why a new file under `vendor/etc/permissions` correctly comes out as
-`vendor_configs_file`).
+- fingerprint enrolment and FOD position/brightness,
+- 60/120 Hz switching and LTPO/display modes,
+- brightness curve and AOD,
+- camera providers and MiuiCamera behavior,
+- RIL/IMS, Wi-Fi/Bluetooth/NFC,
+- audio/Dolby,
+- sensors and auto-rotation,
+- encryption/decryption and recovery compatibility.
 
-If you want to change the camera, add a permission xml, swap the display config,
-etc., drop the file into the matching path under `RES/` and it gets picked up.
-No need to touch the scripts.
+If a build reaches boot animation or Android, the most useful next inputs are `adb logcat`, `dmesg`/kernel log when available, and the relevant `getprop` output. Those are preferable to copying device-specific OP13 constants blindly.
 
-## The porting steps
+## References / credits
 
-For reference, this is what the porter does to assemble the ROM:
-
-1. Fold `mi_ext/product` into `product` and `mi_ext/system` into
-   `system/system`.
-2. Append `mi_ext/etc/build.prop` to both `product/etc/build.prop` and
-   `system/system/build.prop` (dropping the huge `ro.vendor.build.ab_ota_partitions`
-   line from `mi_ext` once, up front, so it lands in neither).
-3. Add `ro.miui.product.home=com.miui.home` and `pm.dexopt.shared=verify` to
-   `system/system/build.prop`.
-4. Tag `ro.mi.os.version.incremental` in `product/etc/build.prop`.
-5. Move `product/pangu/system` into `system/system`.
-6. Merge the Xiaomi vendor `build.prop` tail (the lines after `#end of file`,
-   minus `ro.oplus.image.vendor.version`) into the OnePlus `vendor/build.prop`.
-7. Add the Xiaomi attestation block to `odm/build.prop`.
-8. Strip `import` lines from `odm/build.prop`.
-9. Remove `ro.vendor.oplus.sensor.high_pwm_rgb`.
-10. Add `persist.miui.density_v2=600` and `ro.sf.lcd_density=600` to
-    `product/etc/build.prop`.
-11. Delete `system_ext/priv-app/qcrilmsgtunnel`.
-12. Delete `product/priv-app/MiuiCamera` (RES supplies the working one).
-
-Then it applies the fixes above, regenerates the SELinux config, repacks each
-partition with `mkfs.erofs`, and stores everything in an uncompressed zip.
-
-## Credits
-
-- **MIO Kitchen** — the erofs and image tools in `bin/`.
-- **[payload-dumper-go](https://github.com/ssut/payload-dumper-go)** by ssut —
-  payload.bin extraction (MIT).
-- **[XMAPort](https://github.com/NorthStarK-Lvy/XMAPort)** and
-  **[HyperOS-Port-Python](https://github.com/toraidl/HyperOS-Port-Python)** —
-  references for the porting flow.
-
-The fixes were worked out by palaziks. If you reuse them, keep the credit.
+- Original `palazik/HyperOS_OP13` porter and its HyperOS assembly flow.
+- `tqmane/coloros_port` for the OnePlus 9 Pro device handling reference and dynamic-partition geometry.
+- The uploaded `hyperos-port-to-oneplus_test` project for the OnePlus 9 Pro super-size mapping and general OnePlus porting structure.
+- MIO Kitchen / erofs image tools and `payload-dumper-go` used by the project.
 
 ## License
 
-GPLv3. See [LICENSE](LICENSE).
+GPLv3. See `LICENSE`.
